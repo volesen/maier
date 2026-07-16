@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// Meyer (2,1) is the highest-ranked roll.
 pub const MEYER: u8 = 21;
