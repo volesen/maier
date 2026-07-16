@@ -17,6 +17,13 @@ check STRICT="":
     cd engine/fuzz && cargo +nightly-2026-02-24 fmt --check
     cd engine && cargo +nightly-2026-02-24 fuzz build play_game
     just test
+    just check-py
+
+check-py:
+    cd engine-py && uv run ruff check
+    cd engine-py && uv run ruff format --check
+    cd engine-py && uv run mypy src tests
+    cd engine-py && uv run pytest -q
 
 push BRANCH:
     jj git fetch
