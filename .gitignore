@@ -2,3 +2,5 @@
 /local
 
 .env
+
+__pycache__/
