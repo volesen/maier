@@ -71,15 +71,6 @@ impl PlayerIndex {
         self.0
     }
 }
-pub struct Turn {
-    stage1: Stage1Action,
-    revealed_roll: Option<Roll>,
-    stage2: Option<Stage2Action>,
-}
-
-pub struct History {
-    turns: Vec<Turn>,
-}
 
 pub struct Stage1;
 pub struct Stage2;
@@ -187,6 +178,7 @@ impl<S: Stage> State<S> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum Stage1Result {
     NextStage(State<Stage2>),
     Win(PlayerIndex),
@@ -205,7 +197,7 @@ impl State<Stage1> {
         }
     }
 
-    pub fn apply_stage1_action(mut self, action: Stage1Action, roller: &mut Dice) -> Stage1Result {
+    pub fn apply_stage1_action(mut self, action: Stage1Action) -> Stage1Result {
         let newest_claim = self
             .newest_claim
             .expect("If there is no claim, stage 1 should be skipped.");
@@ -340,12 +332,6 @@ impl State<Stage2> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Construct a `Roll` directly for tests. `Roll`'s field is private, but the
-    /// test module can access it, letting us build specific claims/rolls.
-    fn roll(value: u8) -> Roll {
-        Roll { value }
-    }
 
     // --- Dice / Roll ---------------------------------------------------------
 
