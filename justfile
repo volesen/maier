@@ -29,3 +29,8 @@ push BRANCH:
     jj git fetch
     jj bookmark move {{BRANCH}} --to=@-
     jj git push
+
+alias s := serve
+
+bot BOT="random":
+    cd examples/client && uv run client {{ BOT }}
