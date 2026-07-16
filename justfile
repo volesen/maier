@@ -30,8 +30,8 @@ push BRANCH:
     jj bookmark move {{BRANCH}} --to=@-
     jj git push
 
-bot BOT="random":
-    cd examples/client && uv run client {{ BOT }}
+bot BOT="random" *ARGS:
+    cd examples/client && uv run client {{ BOT }} {{ ARGS }}
 
 server *ARGS:
     cd python && uv run server {{ ARGS }}

@@ -15,6 +15,7 @@ import argparse
 import contextlib
 import json
 import random
+import select
 import socket
 import sys
 import time
@@ -58,6 +59,28 @@ class LineReader:
             if not chunk:
                 return None  # disconnected
             self._buf += chunk
+        return self.try_buffered_line()
+
+    def fill(self) -> bool:
+        """Read once from the socket into the buffer; False on disconnect or error.
+
+        Only call when the socket is known to be readable (e.g. after select),
+        otherwise this may block for up to a second.
+        """
+        self._sock.settimeout(1.0)
+        try:
+            chunk = self._sock.recv(4096)
+        except OSError:
+            return False
+        if not chunk:
+            return False
+        self._buf += chunk
+        return True
+
+    def try_buffered_line(self) -> str | None:
+        """Pop a complete line from the buffer without touching the socket."""
+        if b"\n" not in self._buf:
+            return None
         line, _, self._buf = self._buf.partition(b"\n")
         return line.decode("utf-8", errors="replace")
 
@@ -161,10 +184,13 @@ class Game:
         claim = state.newest_claim()
         if claim is None or self._claimant is None:
             raise RuntimeError("stage 1 is only reached with a claim on the table")
-        legal: list[proto.Roll | proto.Challenge | proto.Claim | proto.Reroll] = [
-            proto.Roll(),
-            proto.Challenge(),
-        ]
+        # Rolling after a maximum claim would leave nothing to claim, so only
+        # challenging is offered (as in the Rust server).
+        legal: list[proto.Roll | proto.Challenge | proto.Claim | proto.Reroll] = (
+            [proto.Challenge()]
+            if _to_rank(claim) == proto.MAX_RANK
+            else [proto.Roll(), proto.Challenge()]
+        )
 
         action = self._request(cur, my_roll=None, legal=legal)
         if isinstance(action, proto.Roll):
@@ -285,10 +311,59 @@ def accept_join(sock: socket.socket, seat: int) -> Client:
     return client
 
 
+def wait_for_players(listener: socket.socket) -> list[Client]:
+    """Accept joins until a joined player sends a `start` message; returns the
+    joined players (at least two — earlier `start` messages are ignored)."""
+    clients: list[Client] = []
+    next_seat = 0
+
+    def wants_start(client: Client) -> bool:
+        """Process the client's buffered lines; True on a valid start request."""
+        while (line := client.reader.try_buffered_line()) is not None:
+            try:
+                msg = proto.client_message_adapter.validate_json(line)
+            except ValidationError:
+                continue
+            if not isinstance(msg, proto.Start):
+                continue
+            if len(clients) < 2:
+                print(
+                    f"{client.id} asked to start, but a game needs at least two players",
+                    file=sys.stderr,
+                )
+                continue
+            print(f"{client.id} started the game with {len(clients)} players", file=sys.stderr)
+            return True
+        return False
+
+    while True:
+        readable, _, _ = select.select([listener, *(c.sock for c in clients)], [], [])
+        for ready in readable:
+            if ready is listener:
+                sock, addr = listener.accept()
+                try:
+                    client = accept_join(sock, next_seat)
+                except (ValueError, ValidationError, OSError) as err:
+                    print(f"rejected connection from {addr}: {err}", file=sys.stderr)
+                    sock.close()
+                    continue
+                next_seat += 1
+                print(f"{client.name} joined as {client.id} from {addr}", file=sys.stderr)
+                clients.append(client)
+            else:
+                client = next(c for c in clients if c.sock is ready)
+                if not client.reader.fill():
+                    print(f"{client.name} ({client.id}) left the lobby", file=sys.stderr)
+                    clients.remove(client)
+                    client.sock.close()
+                    continue
+            if wants_start(client):
+                return clients
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a Meyer game server")
     parser.add_argument("port", nargs="?", type=int, default=5000)
-    parser.add_argument("num_players", nargs="?", type=int, default=2)
     parser.add_argument("deadline_ms", nargs="?", type=int, default=DEFAULT_TURN_DEADLINE_MS)
     parser.add_argument("--seed", type=int, default=None, help="dice seed (random by default)")
     args = parser.parse_args()
@@ -297,19 +372,10 @@ def main() -> None:
 
     with socket.create_server(("0.0.0.0", args.port)) as listener:
         print(
-            f"listening on port {args.port}, waiting for {args.num_players} players",
+            f'listening on port {args.port}; any joined player sends {{"type": "start"}} '
+            "to begin the game",
             file=sys.stderr,
         )
-        clients: list[Client] = []
-        while len(clients) < args.num_players:
-            sock, addr = listener.accept()
-            try:
-                client = accept_join(sock, len(clients))
-            except (ValueError, ValidationError, OSError) as err:
-                print(f"rejected connection from {addr}: {err}", file=sys.stderr)
-                sock.close()
-                continue
-            print(f"{client.name} joined as {client.id} from {addr}", file=sys.stderr)
-            clients.append(client)
+        clients = wait_for_players(listener)
 
     Game(clients, args.deadline_ms / 1000, dice_seed).run()

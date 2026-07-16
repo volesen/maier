@@ -56,9 +56,15 @@ class Act(_Frozen):
     action: Action
 
 
-ClientMessage = Annotated[Join | Act, Field(discriminator="type")]
+class Start(_Frozen):
+    """Sent by any joined player to start the game with all joined players."""
 
-client_message_adapter = TypeAdapter[Join | Act](ClientMessage)
+    type: Literal["start"] = "start"
+
+
+ClientMessage = Annotated[Join | Act | Start, Field(discriminator="type")]
+
+client_message_adapter = TypeAdapter[Join | Act | Start](ClientMessage)
 
 
 # --- Server -> client -------------------------------------------------------

@@ -11,7 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from server import protocol as proto
-from server.game import Client, Game, LineReader
+from server.game import Client, Game, LineReader, wait_for_players
 
 
 class BotResult(BaseModel):
@@ -87,3 +87,43 @@ def test_full_game_over_sockets(seed: int) -> None:
         sock.close()
     for client in clients:
         client.sock.close()
+
+
+def test_lobby_starts_on_start_message() -> None:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        port = listener.getsockname()[1]
+        result: list[Client] = []
+
+        def lobby() -> None:
+            result.extend(wait_for_players(listener))
+
+        thread = threading.Thread(target=lobby, daemon=True)
+        thread.start()
+
+        def join(name: str) -> socket.socket:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            sock.sendall((json.dumps({"type": "join", "name": name}) + "\n").encode())
+            reader = LineReader(sock)
+            line = reader.read_line(time.monotonic() + 5)
+            assert line is not None
+            welcome = proto.server_message_adapter.validate_python(json.loads(line))
+            assert isinstance(welcome, proto.Welcome)
+            return sock
+
+        first = join("first")
+        # A start with only one player joined must be ignored.
+        first.sendall(b'{"type": "start"}\n')
+        time.sleep(0.2)
+        assert thread.is_alive(), "lobby must not start with a single player"
+
+        second = join("second")
+        third = join("third")
+        second.sendall(b'{"type": "start"}\n')
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "lobby did not start after a valid start message"
+        assert [client.name for client in result] == ["first", "second", "third"]
+
+        for sock in (first, second, third):
+            sock.close()
+        for client in result:
+            client.sock.close()
