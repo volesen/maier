@@ -243,7 +243,7 @@ impl State<Stage2> {
     pub fn apply_stage2_action(mut self, action: Stage2Action) -> Stage2Result {
         assert!(
             !self.reroll,
-            "Rerolls be started in the previous player's stage 2, so cannot still be active in stage 2."
+            "Rerolls must be started in the previous player's stage 2, so cannot still be active in stage 2."
         );
         if let Some(Claim {
             claim: cur_claim,
@@ -294,5 +294,73 @@ impl State<Stage2> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Construct a `Roll` directly for tests. `Roll`'s field is private, but the
+    /// test module can access it, letting us build specific claims/rolls.
+    fn roll(value: u8) -> Roll {
+        Roll { value }
+    }
+
+    // --- Dice / Roll ---------------------------------------------------------
+
+    #[test]
+    fn dice_is_deterministic_for_a_seed() {
+        let mut a = Dice::new(42);
+        let mut b = Dice::new(42);
+        for _ in 0..100 {
+            assert_eq!(a.roll(), b.roll());
+        }
+    }
+
+    #[test]
+    fn different_seeds_generally_differ() {
+        let mut a = Dice::new(1);
+        let mut b = Dice::new(2);
+        // Extremely unlikely all 20 rolls coincide if the seed matters.
+        let equal = (0..20).all(|_| a.roll() == b.roll());
+        assert!(!equal);
+    }
+
+    // --- next_player ---------------------------------------------------------
+
+    /// Build a minimal `State` with the given lives and current player.
+    /// Uses a fixed dice seed; the roll value is irrelevant for these tests.
+    fn state_with_lives(player_lives: Vec<u32>, cur_player: usize) -> State<Stage2> {
+        let mut dice = Dice::new(0);
+        let cur_roll = CurrentRoll::create(&mut dice, PlayerIndex(cur_player));
+        State {
+            dice,
+            cur_roll,
+            newest_claim: None,
+            reroll: false,
+            cur_player: PlayerIndex(cur_player),
+            player_lives,
+            _phantom: PhantomData::<Stage2>,
+        }
+    }
+
+    #[test]
+    fn next_player_wraps_around() {
+        let state = state_with_lives(vec![1, 1, 1], 2);
+        assert_eq!(state.next_player(), Some(PlayerIndex(0)));
+    }
+
+    #[test]
+    fn next_player_skips_dead_players() {
+        // Player 1 is out; from player 0 the next alive is player 2.
+        let state = state_with_lives(vec![1, 0, 1], 0);
+        assert_eq!(state.next_player(), Some(PlayerIndex(2)));
+    }
+
+    #[test]
+    fn next_player_returns_none_when_only_current_has_lives() {
+        let state = state_with_lives(vec![0, 3, 0], 1);
+        assert_eq!(state.next_player(), None);
     }
 }
