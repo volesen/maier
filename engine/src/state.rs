@@ -122,6 +122,10 @@ impl<S: Stage> State<S> {
         self.cur_player
     }
 
+    pub fn roll(&self) -> Roll {
+        self.cur_roll.roll
+    }
+
     /// The claim currently on the table, if any.
     pub fn newest_claim(&self) -> Option<Roll> {
         self.newest_claim.map(|c| c.claim)
@@ -258,7 +262,7 @@ pub enum Stage2Result {
 }
 
 impl State<Stage2> {
-    pub fn new(num_players: u32, player_lives: u32, dice_seed: u64) -> Self {
+    pub fn new(num_players: usize, player_lives: u32, dice_seed: u64) -> Self {
         let mut dice = Dice::new(dice_seed);
         let cur_roll = CurrentRoll::create(&mut dice, PlayerIndex(0));
         State {
@@ -267,7 +271,7 @@ impl State<Stage2> {
             newest_claim: None,
             reroll: false,
             cur_player: PlayerIndex(0),
-            player_lives: vec![player_lives; num_players as usize],
+            player_lives: vec![player_lives; num_players],
             _phantom: PhantomData::<_>,
         }
     }
