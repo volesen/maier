@@ -10,10 +10,10 @@
 //! underflow, or one of our invariant asserts below — is a genuine bug and is
 //! reported by libFuzzer as a crash.
 
-use libfuzzer_sys::fuzz_target;
-use server::state::{
-    Dice, Roll, Stage1, Stage1Action, Stage1Result, Stage2, Stage2Action, Stage2Result, State,
+use engine::state::{
+    Roll, Stage1, Stage1Action, Stage1Result, Stage2, Stage2Action, Stage2Result, State,
 };
+use libfuzzer_sys::fuzz_target;
 
 /// Pulls bytes off the front of the fuzzer input to make decisions. When the
 /// input is exhausted it yields 0, so a short input simply drives a short game.
@@ -89,9 +89,6 @@ fuzz_target!(|data: &[u8]| {
         seed = (seed << 8) | stream.next() as u64;
     }
 
-    // A separate dice source for stage-1 rerolls, as the API requires.
-    let mut roller = Dice::new(seed ^ 0x5DEE_CE66);
-
     let mut game = Game::Stage2(State::<Stage2>::new(num_players, lives, seed));
 
     // Hard cap: the game must terminate in a bounded number of transitions.
@@ -116,7 +113,7 @@ fuzz_target!(|data: &[u8]| {
                     Stage1Action::Challenge
                 };
 
-                match state.apply_stage1_action(action, &mut roller) {
+                match state.apply_stage1_action(action) {
                     Stage1Result::NextStage(next) => {
                         check_invariants(next.player_lives(), next.cur_player().get(), prev_total);
                         Game::Stage2(next)

@@ -47,6 +47,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine"
+version = "0.0.0"
+dependencies = [
+ "rand",
+ "rand_chacha",
+]
+
+[[package]]
+name = "engine-fuzz"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "libfuzzer-sys",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -149,22 +165,6 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
-
-[[package]]
-name = "server"
-version = "0.0.0"
-dependencies = [
- "rand",
- "rand_chacha",
-]
-
-[[package]]
-name = "server-fuzz"
-version = "0.0.0"
-dependencies = [
- "libfuzzer-sys",
- "server",
-]
 
 [[package]]
 name = "shlex"
