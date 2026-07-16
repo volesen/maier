@@ -20,17 +20,15 @@ check STRICT="":
     just check-py
 
 check-py:
-    cd engine-py && uv run ruff check
-    cd engine-py && uv run ruff format --check
-    cd engine-py && uv run mypy src tests
-    cd engine-py && uv run pytest -q
+    cd python && uv run ruff check
+    cd python && uv run ruff format --check
+    cd python && uv run mypy src tests
+    cd python && uv run pytest -q
 
 push BRANCH:
     jj git fetch
     jj bookmark move {{BRANCH}} --to=@-
     jj git push
-
-alias s := serve
 
 bot BOT="random":
     cd examples/client && uv run client {{ BOT }}
