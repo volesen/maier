@@ -12,6 +12,25 @@ pub struct Roll {
     value: u8,
 }
 
+impl Roll {
+    /// The highest value the dice can produce (`Uniform::new(0, 21)` is
+    /// exclusive on the high end).
+    pub const MAX: u8 = 20;
+
+    /// Construct a `Roll` from a raw value, saturating at [`Roll::MAX`] so a
+    /// `Roll` can never represent a value the dice could not produce. Intended
+    /// for tests and fuzzing, where rolls must be built without a [`Dice`].
+    pub fn from_value(value: u8) -> Self {
+        Self {
+            value: value.min(Self::MAX),
+        }
+    }
+
+    pub fn value(self) -> u8 {
+        self.value
+    }
+}
+
 pub struct Dice {
     rng: Rng,
     uniform: Uniform<u8>,
@@ -46,6 +65,12 @@ pub enum Stage2Action {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlayerIndex(usize);
+
+impl PlayerIndex {
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
 pub struct Turn {
     stage1: Stage1Action,
     revealed_roll: Option<Roll>,
@@ -96,6 +121,21 @@ pub struct State<S: Stage> {
 }
 
 impl<S: Stage> State<S> {
+    /// Lives remaining for each player, indexed by player.
+    pub fn player_lives(&self) -> &[u32] {
+        &self.player_lives
+    }
+
+    /// The player whose turn it currently is.
+    pub fn cur_player(&self) -> PlayerIndex {
+        self.cur_player
+    }
+
+    /// The claim currently on the table, if any.
+    pub fn newest_claim(&self) -> Option<Roll> {
+        self.newest_claim.map(|c| c.claim)
+    }
+
     fn next_player(&self) -> Option<PlayerIndex> {
         // Find first player with lives left after current player
         let num_players = self.player_lives.len();

@@ -3,6 +3,9 @@ test *ARGS:
 
 alias t := test
 
+fuzz MAX_TIME="":
+    cd server && cargo +nightly-2026-02-24 fuzz run play_game {{ if MAX_TIME != "" { "-- -max_total_time=" + MAX_TIME } else { "" } }}
+
 fmt:
     cargo fmt
 

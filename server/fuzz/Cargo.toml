@@ -1,0 +1,25 @@
+[package]
+name = "server-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Keep the fuzz crate out of the parent workspace so cargo-fuzz's custom
+# RUSTFLAGS (sanitizers, coverage) don't leak into normal `cargo` builds.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.server]
+path = ".."
+
+[[bin]]
+name = "play_game"
+path = "fuzz_targets/play_game.rs"
+test = false
+doc = false
+bench = false
