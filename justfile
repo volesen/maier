@@ -12,7 +12,10 @@ fmt:
 check STRICT="":
     cargo clippy --all --all-targets {{ if STRICT != "" { "-- -D warnings" } else { "" } }}
     cargo fmt --check --all
-    cargo +nightly-2026-02-24 fuzz build play_game
+    # The fuzz crate is a separate workspace, so lint and format it explicitly.
+    cd engine/fuzz && cargo +nightly-2026-02-24 clippy --all-targets {{ if STRICT != "" { "-- -D warnings" } else { "" } }}
+    cd engine/fuzz && cargo +nightly-2026-02-24 fmt --check
+    cd engine && cargo +nightly-2026-02-24 fuzz build play_game
     just test
 
 push BRANCH:

@@ -107,7 +107,7 @@ fuzz_target!(|data: &[u8]| {
                 let lives_before: Vec<u32> = state.player_lives().to_vec();
                 let prev_total: u32 = lives_before.iter().sum();
 
-                let action = if stream.next() % 2 == 0 {
+                let action = if stream.next().is_multiple_of(2) {
                     Stage1Action::Roll
                 } else {
                     Stage1Action::Challenge
@@ -128,7 +128,7 @@ fuzz_target!(|data: &[u8]| {
                 let lives_before: Vec<u32> = state.player_lives().to_vec();
                 let prev_total: u32 = lives_before.iter().sum();
 
-                let action = if stream.next() % 2 == 0 {
+                let action = if stream.next().is_multiple_of(2) {
                     // Build a claim value from the next byte, clamped into range.
                     Stage2Action::Claim(Roll::from_value(stream.next() % (Roll::MAX + 1)))
                 } else {
