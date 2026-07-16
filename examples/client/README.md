@@ -43,6 +43,11 @@ autoplay for you after the default five seconds.
 Bots can pass `--start` to ask the server to begin as soon as they join —
 use it on the last client to join.
 
+The server hosts multiple games at once via named lobbies: `--lobby NAME`
+joins the lobby of that name, creating it if it does not exist yet (clients
+without `--lobby` all share the server's default lobby). `start` only begins
+the sender's own lobby; once a lobby's game starts its name is free to reuse.
+
 The wire protocol is newline-delimited JSON over TCP; see `src/client/types.py`
 for the message shapes. Rolls and claims are plain ranks from 1 (3-2, the
 lowest roll) to 21 (Meyer) — the protocol never mentions dice, so comparing

@@ -15,6 +15,7 @@ from client.types import (
     GameEnd,
     GameStart,
     OnEvent,
+    OnMessage,
     ServerMessage,
     Turn,
 )
@@ -80,8 +81,10 @@ def run(
     host: str = "127.0.0.1",
     port: int = 5000,
     on_event: OnEvent | None = None,
+    on_message: OnMessage | None = None,
     start: bool = False,
     interactive_start: bool = False,
+    lobby: str | None = None,
 ) -> None:
     with socket.create_connection((host, port)) as sock:
         buf = bytearray()
@@ -102,16 +105,19 @@ def run(
                             "action": action.model_dump(),
                         }
                     )
-                case GameEnd():
-                    print(line)
-                    return None
+                    return msg
+                case _ if on_message is not None:
+                    on_message(msg)
                 case EventBase() if on_event is not None:
                     on_event(msg)
                 case _:
                     print(line)
-            return msg
+            return None if isinstance(msg, GameEnd) else msg
 
-        send({"type": "join", "name": name, "protocol": 1})
+        join: dict = {"type": "join", "name": name, "protocol": 1}
+        if lobby is not None:
+            join["lobby"] = lobby
+        send(join)
         if start:
             send({"type": "start"})
         if interactive_start:
@@ -140,14 +146,20 @@ def main() -> None:
         action="store_true",
         help="ask the server to start the game as soon as this client has joined",
     )
+    parser.add_argument(
+        "--lobby",
+        help="named lobby to join; created if it does not exist yet (server default otherwise)",
+    )
     args = parser.parse_args()
 
     on_event: OnEvent | None = None
+    on_message: OnMessage | None = None
     interactive_start = False
     match args.bot:
         case "human":
-            decide = human.decide
-            on_event = human.on_event
+            player = human.HumanPlayer()
+            decide = player.decide
+            on_message = player.on_message
             interactive_start = not args.start
         case "honest":
             decide = baselines.honest
@@ -168,6 +180,8 @@ def main() -> None:
         args.host,
         args.port,
         on_event=on_event,
+        on_message=on_message,
         start=args.start,
         interactive_start=interactive_start,
+        lobby=args.lobby,
     )

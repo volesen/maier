@@ -47,6 +47,8 @@ Action = Annotated[Roll | Challenge | Claim | Reroll, Field(discriminator="actio
 class Join(_Frozen):
     type: Literal["join"] = "join"
     name: str
+    lobby: str = "default"
+    """Lobby to join; a lobby is created the first time its name is used."""
     protocol: int | None = None
 
 
@@ -57,7 +59,7 @@ class Act(_Frozen):
 
 
 class Start(_Frozen):
-    """Sent by any joined player to start the game with all joined players."""
+    """Sent by any joined player to start their lobby's game with all its players."""
 
     type: Literal["start"] = "start"
 
@@ -88,6 +90,7 @@ class State(_Frozen):
 class Welcome(_Frozen):
     type: Literal["welcome"] = "welcome"
     player_id: str
+    lobby: str
 
 
 class PlayerInfo(_Frozen):

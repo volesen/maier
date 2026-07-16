@@ -43,6 +43,7 @@ class State(BaseModel):
 class Welcome(BaseModel):
     type: Literal["welcome"] = "welcome"
     player_id: str
+    lobby: str | None = None
 
 
 class PlayerInfo(BaseModel):
@@ -132,3 +133,6 @@ Decide = Callable[[State, list[Action]], Action]
 
 OnEvent = Callable[[EventBase], None]
 """Optional listener for broadcast game events."""
+
+OnMessage = Callable[[ServerMessage], None]
+"""Optional listener for every non-turn server message; replaces raw printing."""

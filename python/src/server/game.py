@@ -18,6 +18,7 @@ import random
 import select
 import socket
 import sys
+import threading
 import time
 
 from pydantic import BaseModel, ValidationError
@@ -295,7 +296,7 @@ class Game:
         return self._clients[p].id
 
 
-def accept_join(sock: socket.socket, seat: int) -> Client:
+def accept_join(sock: socket.socket) -> tuple[proto.Join, LineReader]:
     sock.settimeout(JOIN_DEADLINE_S)
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     reader = LineReader(sock)
@@ -305,19 +306,24 @@ def accept_join(sock: socket.socket, seat: int) -> Client:
     msg = proto.client_message_adapter.validate_json(line)
     if not isinstance(msg, proto.Join):
         raise ValueError("expected join")
-    client = Client(player_id=f"p{seat}", name=msg.name, sock=sock)
-    client.reader = reader
-    client.send(proto.Welcome(player_id=client.id))
-    return client
+    return msg, reader
 
 
-def wait_for_players(listener: socket.socket) -> list[Client]:
-    """Accept joins until a joined player sends a `start` message; returns the
-    joined players (at least two — earlier `start` messages are ignored)."""
-    clients: list[Client] = []
-    next_seat = 0
+class Lobby:
+    """Players waiting for a game; created the first time its name is joined."""
 
-    def wants_start(client: Client) -> bool:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.clients: list[Client] = []
+        self.next_seat = 0
+
+
+def serve(listener: socket.socket, turn_deadline_s: float, dice_seed: int | None) -> None:
+    """Accept joins into named lobbies forever; a lobby's game starts in its
+    own thread when one of its players sends `start`, freeing the name."""
+    lobbies: dict[str, Lobby] = {}
+
+    def wants_start(lobby: Lobby, client: Client) -> bool:
         """Process the client's buffered lines; True on a valid start request."""
         while (line := client.reader.try_buffered_line()) is not None:
             try:
@@ -326,39 +332,85 @@ def wait_for_players(listener: socket.socket) -> list[Client]:
                 continue
             if not isinstance(msg, proto.Start):
                 continue
-            if len(clients) < 2:
+            if len(lobby.clients) < 2:
                 print(
-                    f"{client.id} asked to start, but a game needs at least two players",
+                    f"{client.id} asked to start lobby {lobby.name!r}, "
+                    "but a game needs at least two players",
                     file=sys.stderr,
                 )
                 continue
-            print(f"{client.id} started the game with {len(clients)} players", file=sys.stderr)
+            print(
+                f"{client.id} started lobby {lobby.name!r} with {len(lobby.clients)} players",
+                file=sys.stderr,
+            )
             return True
         return False
 
+    def start_game(lobby: Lobby) -> None:
+        del lobbies[lobby.name]
+        seed = dice_seed if dice_seed is not None else random.getrandbits(64)
+        game = Game(lobby.clients, turn_deadline_s, seed)
+        threading.Thread(target=game.run, name=f"game-{lobby.name}", daemon=True).start()
+
     while True:
-        readable, _, _ = select.select([listener, *(c.sock for c in clients)], [], [])
+        socks = [listener, *(c.sock for lobby in lobbies.values() for c in lobby.clients)]
+        try:
+            readable, _, _ = select.select(socks, [], [])
+        except (OSError, ValueError):
+            if listener.fileno() == -1:
+                return  # listener closed: shut down
+            # Drop lobby clients whose sockets have been closed under us.
+            for lobby in list(lobbies.values()):
+                lobby.clients = [c for c in lobby.clients if c.sock.fileno() != -1]
+                if not lobby.clients:
+                    del lobbies[lobby.name]
+            continue
         for ready in readable:
             if ready is listener:
                 sock, addr = listener.accept()
                 try:
-                    client = accept_join(sock, next_seat)
+                    join, reader = accept_join(sock)
                 except (ValueError, ValidationError, OSError) as err:
                     print(f"rejected connection from {addr}: {err}", file=sys.stderr)
                     sock.close()
                     continue
-                next_seat += 1
-                print(f"{client.name} joined as {client.id} from {addr}", file=sys.stderr)
-                clients.append(client)
+                lobby = lobbies.setdefault(join.lobby, Lobby(join.lobby))
+                client = Client(player_id=f"p{lobby.next_seat}", name=join.name, sock=sock)
+                client.reader = reader
+                lobby.next_seat += 1
+                lobby.clients.append(client)
+                client.send(proto.Welcome(player_id=client.id, lobby=lobby.name))
+                print(
+                    f"{client.name} joined lobby {lobby.name!r} as {client.id} from {addr}",
+                    file=sys.stderr,
+                )
             else:
-                client = next(c for c in clients if c.sock is ready)
-                if not client.reader.fill():
-                    print(f"{client.name} ({client.id}) left the lobby", file=sys.stderr)
-                    clients.remove(client)
-                    client.sock.close()
+                found = next(
+                    (
+                        (lobby, client)
+                        for lobby in lobbies.values()
+                        for client in lobby.clients
+                        if client.sock is ready
+                    ),
+                    None,
+                )
+                if found is None:
+                    # The lobby started earlier in this select round; its game
+                    # thread owns the socket now.
                     continue
-            if wants_start(client):
-                return clients
+                lobby, client = found
+                if not client.reader.fill():
+                    print(
+                        f"{client.name} ({client.id}) left lobby {lobby.name!r}",
+                        file=sys.stderr,
+                    )
+                    lobby.clients.remove(client)
+                    client.sock.close()
+                    if not lobby.clients:
+                        del lobbies[lobby.name]
+                    continue
+            if wants_start(lobby, client):
+                start_game(lobby)
 
 
 def main() -> None:
@@ -368,14 +420,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None, help="dice seed (random by default)")
     args = parser.parse_args()
 
-    dice_seed = args.seed if args.seed is not None else random.getrandbits(64)
-
     with socket.create_server(("0.0.0.0", args.port)) as listener:
         print(
-            f'listening on port {args.port}; any joined player sends {{"type": "start"}} '
-            "to begin the game",
+            f"listening on port {args.port}; clients join named lobbies and any "
+            'joined player sends {"type": "start"} to begin their lobby\'s game',
             file=sys.stderr,
         )
-        clients = wait_for_players(listener)
-
-    Game(clients, args.deadline_ms / 1000, dice_seed).run()
+        serve(listener, args.deadline_ms / 1000, args.seed)
