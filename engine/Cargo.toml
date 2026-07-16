@@ -1,8 +1,8 @@
 [package]
 name = "engine"
 version = "0.0.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
-rand_chacha = "0.10.0"
-rand = "0.10.2"
+rand.workspace = true
+rand_chacha.workspace = true
