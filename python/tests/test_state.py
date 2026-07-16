@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from engine_py.state import (
+from engine.state import (
     ClaimAction,
     Dice,
     NewGame,

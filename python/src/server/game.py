@@ -1,0 +1,315 @@
+"""TCP game server, structured after the Rust server (`server/src/main.rs`) but
+using the `engine` package as the rules engine.
+
+The engine plays a two-stage variant: in stage 1 the current player reacts to
+the claim on the table (roll their own dice, or challenge); in stage 2 they
+know their hidden roll and either claim a rank or pass a blind reroll to the
+next player. The server only ever offers actions that the engine accepts and
+that do not automatically forfeit a life, so every reply a client can pick is
+meaningful.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import random
+import socket
+import sys
+import time
+
+from pydantic import BaseModel, ValidationError
+
+from engine import state as eng
+from server import protocol as proto
+
+LIVES = 6
+DEFAULT_TURN_DEADLINE_MS = 5000
+JOIN_DEADLINE_S = 10.0
+
+
+def _to_rank(roll: eng.Roll) -> int:
+    return roll.value + 1
+
+
+def _rank_to_roll(rank: int) -> eng.Roll:
+    return eng.Roll(value=rank - 1)
+
+
+class LineReader:
+    """Buffered newline-delimited reader with an absolute deadline per line."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+        self._buf = b""
+
+    def read_line(self, deadline: float) -> str | None:
+        """Read one line, or return None on timeout, disconnect, or error."""
+        while b"\n" not in self._buf:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self._sock.settimeout(remaining)
+            try:
+                chunk = self._sock.recv(4096)
+            except OSError:
+                return None
+            if not chunk:
+                return None  # disconnected
+            self._buf += chunk
+        line, _, self._buf = self._buf.partition(b"\n")
+        return line.decode("utf-8", errors="replace")
+
+
+class Client:
+    def __init__(self, player_id: str, name: str, sock: socket.socket) -> None:
+        self.id = player_id
+        self.name = name
+        self.sock = sock
+        self.reader = LineReader(sock)
+
+    def send(self, msg: BaseModel) -> None:
+        line = json.dumps(msg.model_dump(mode="json")) + "\n"
+        # A dead connection just means this player times out on their turns.
+        with contextlib.suppress(OSError):
+            self.sock.sendall(line.encode("utf-8"))
+
+
+class Game:
+    def __init__(self, clients: list[Client], turn_deadline_s: float, dice_seed: int) -> None:
+        self._clients = clients
+        self._turn_deadline_s = turn_deadline_s
+        self._round = 0
+        self._next_request_id = 0
+        self._rng = random.Random()
+        self._state: eng.Stage1State | eng.Stage2State = eng.Stage2State.new(
+            len(clients), LIVES, dice_seed
+        )
+        # Who made the claim on the table, and who rolled the dice it will be
+        # judged against; the engine keeps both hidden, so track them here.
+        self._claimant: int | None = None
+        self._roller: int = self._state.cur_player().index
+        self._reroll_pending = False
+
+    def run(self) -> None:
+        self._broadcast(
+            proto.GameStart(
+                players=[proto.PlayerInfo(id=c.id, name=c.name) for c in self._clients],
+                lives=LIVES,
+            )
+        )
+        self._start_round()
+        while True:
+            if isinstance(self._state, eng.Stage2State):
+                winner = self._play_stage2(self._state)
+            else:
+                winner = self._play_stage1(self._state)
+            if winner is not None:
+                print(
+                    f"game over after {self._round} rounds, winner: {self._clients[winner].name}",
+                    file=sys.stderr,
+                )
+                self._broadcast(proto.GameEnd(winner=self._id(winner)))
+                return
+
+    def _start_round(self) -> None:
+        self._round += 1
+        self._broadcast(
+            proto.RoundStart(
+                round=self._round,
+                starting_player=self._id(self._state.cur_player().index),
+            )
+        )
+
+    def _play_stage2(self, state: eng.Stage2State) -> int | None:
+        """The current player knows their roll: claim a rank or pass a reroll."""
+        cur = state.cur_player().index
+        cur_claim = state.newest_claim()
+        min_rank = 1 if cur_claim is None else _to_rank(cur_claim) + 1
+        legal: list[proto.Roll | proto.Challenge | proto.Claim | proto.Reroll] = [
+            proto.Claim(rank=rank) for rank in range(min_rank, proto.MAX_RANK + 1)
+        ]
+        if cur_claim is not None:
+            # Rerolling with no claim on the table forfeits a life, so it is
+            # only offered once there is a claim.
+            legal.append(proto.Reroll())
+
+        action = self._request(cur, my_roll=_to_rank(state.roll()), legal=legal)
+        if isinstance(action, proto.Claim):
+            result = state.apply_stage2_action(eng.ClaimAction(roll=_rank_to_roll(action.rank)))
+            self._claimant = cur
+            self._broadcast(proto.Claimed(player=self._id(cur), rank=action.rank))
+        elif isinstance(action, proto.Reroll):
+            result = state.apply_stage2_action(eng.RerollAction())
+            self._roller = cur
+            self._reroll_pending = True
+            self._broadcast(proto.Rerolled(player=self._id(cur)))
+        else:
+            raise RuntimeError("not in legal actions")
+
+        # Every offered action raises the claim or passes a reroll, so the
+        # round cannot end here.
+        if not isinstance(result, eng.NextTurn):
+            raise RuntimeError("legal stage 2 actions never end a round")
+        self._state = result.state
+        return None
+
+    def _play_stage1(self, state: eng.Stage1State) -> int | None:
+        """The current player reacts to the claim: roll their own dice or challenge."""
+        cur = state.cur_player().index
+        claim = state.newest_claim()
+        if claim is None or self._claimant is None:
+            raise RuntimeError("stage 1 is only reached with a claim on the table")
+        legal: list[proto.Roll | proto.Challenge | proto.Claim | proto.Reroll] = [
+            proto.Roll(),
+            proto.Challenge(),
+        ]
+
+        action = self._request(cur, my_roll=None, legal=legal)
+        if isinstance(action, proto.Roll):
+            result = state.apply_stage1_action(eng.Stage1Action.ROLL)
+            self._roller = cur
+            self._reroll_pending = False
+            self._broadcast(proto.Rolled(player=self._id(cur)))
+            if not isinstance(result, eng.NextStage):
+                raise RuntimeError("rolling never ends a round")
+            self._state = result.state
+            return None
+        if not isinstance(action, proto.Challenge):
+            raise RuntimeError("not in legal actions")
+
+        # Resolve the challenge by the engine's rules; the engine hides the
+        # outcome details, so recompute the loser for the reveal broadcast.
+        actual = state.roll()
+        claimed_rank = _to_rank(claim)
+        if self._reroll_pending:
+            # A blind reroll must beat the claim.
+            loser = cur if actual > claim else self._roller
+        else:
+            # A claim is honest only if it matches the roll exactly.
+            loser = cur if actual == claim else self._claimant
+        self._broadcast(
+            proto.Challenged(challenger=self._id(cur), claimant=self._id(self._claimant))
+        )
+        result = state.apply_stage1_action(eng.Stage1Action.CHALLENGE)
+        self._broadcast(
+            proto.Reveal(
+                claimant=self._id(self._claimant),
+                actual=_to_rank(actual),
+                claimed=claimed_rank,
+                loser=self._id(loser),
+                lives_lost=1,
+            )
+        )
+
+        if isinstance(result, eng.Win):
+            # The loser's last life is gone and only the winner remains.
+            self._broadcast(proto.Eliminated(player=self._id(loser)))
+            return result.winner.index
+        if not isinstance(result, eng.NextStage):
+            raise RuntimeError("unreachable: challenge yields NextStage or Win")
+        if result.state.player_lives()[loser] == 0:
+            self._broadcast(proto.Eliminated(player=self._id(loser)))
+        self._state = result.state
+        self._claimant = None
+        self._roller = result.state.cur_player().index
+        self._reroll_pending = False
+        self._start_round()
+        return None
+
+    def _request(
+        self,
+        p: int,
+        my_roll: int | None,
+        legal: list[proto.Roll | proto.Challenge | proto.Claim | proto.Reroll],
+    ) -> proto.Roll | proto.Challenge | proto.Claim | proto.Reroll:
+        """Ask player `p` to pick one of `legal`; falls back to a random legal
+        action on timeout, disconnect, or invalid reply."""
+        self._next_request_id += 1
+        request_id = str(self._next_request_id)
+        claim = self._state.newest_claim()
+        state = proto.State(
+            you=self._id(p),
+            round=self._round,
+            my_roll=my_roll,
+            current_claim=_to_rank(claim) if claim is not None else None,
+            claimant=self._id(self._claimant) if self._claimant is not None else None,
+            lives={
+                client.id: lives
+                for client, lives in zip(self._clients, self._state.player_lives(), strict=True)
+            },
+            turn_order=[client.id for client in self._clients],
+            rerolled=self._reroll_pending,
+        )
+        client = self._clients[p]
+        client.send(proto.Turn(request_id=request_id, state=state, legal_actions=legal))
+
+        deadline = time.monotonic() + self._turn_deadline_s
+        while True:
+            line = client.reader.read_line(deadline)
+            if line is None:
+                break
+            try:
+                msg = proto.client_message_adapter.validate_json(line)
+            except ValidationError:
+                continue
+            if isinstance(msg, proto.Act) and msg.request_id == request_id and msg.action in legal:
+                return msg.action
+            # Stale, malformed, or illegal reply: keep waiting.
+        action = self._rng.choice(legal)
+        print(f"{client.id}: no valid reply, autoplaying {action!r}", file=sys.stderr)
+        return action
+
+    def _broadcast(self, msg: BaseModel) -> None:
+        for client in self._clients:
+            client.send(msg)
+
+    def _id(self, p: int) -> str:
+        return self._clients[p].id
+
+
+def accept_join(sock: socket.socket, seat: int) -> Client:
+    sock.settimeout(JOIN_DEADLINE_S)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    reader = LineReader(sock)
+    line = reader.read_line(time.monotonic() + JOIN_DEADLINE_S)
+    if line is None:
+        raise ValueError("no join message before the deadline")
+    msg = proto.client_message_adapter.validate_json(line)
+    if not isinstance(msg, proto.Join):
+        raise ValueError("expected join")
+    client = Client(player_id=f"p{seat}", name=msg.name, sock=sock)
+    client.reader = reader
+    client.send(proto.Welcome(player_id=client.id))
+    return client
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run a Meyer game server")
+    parser.add_argument("port", nargs="?", type=int, default=5000)
+    parser.add_argument("num_players", nargs="?", type=int, default=2)
+    parser.add_argument("deadline_ms", nargs="?", type=int, default=DEFAULT_TURN_DEADLINE_MS)
+    parser.add_argument("--seed", type=int, default=None, help="dice seed (random by default)")
+    args = parser.parse_args()
+
+    dice_seed = args.seed if args.seed is not None else random.getrandbits(64)
+
+    with socket.create_server(("0.0.0.0", args.port)) as listener:
+        print(
+            f"listening on port {args.port}, waiting for {args.num_players} players",
+            file=sys.stderr,
+        )
+        clients: list[Client] = []
+        while len(clients) < args.num_players:
+            sock, addr = listener.accept()
+            try:
+                client = accept_join(sock, len(clients))
+            except (ValueError, ValidationError, OSError) as err:
+                print(f"rejected connection from {addr}: {err}", file=sys.stderr)
+                sock.close()
+                continue
+            print(f"{client.name} joined as {client.id} from {addr}", file=sys.stderr)
+            clients.append(client)
+
+    Game(clients, args.deadline_ms / 1000, dice_seed).run()

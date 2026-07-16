@@ -32,3 +32,6 @@ push BRANCH:
 
 bot BOT="random":
     cd examples/client && uv run client {{ BOT }}
+
+server *ARGS:
+    cd python && uv run server {{ ARGS }}
