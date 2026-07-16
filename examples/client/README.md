@@ -1,14 +1,25 @@
-# Meyer bot client
+# Example Meyer clients
 
-A minimal Python client for the Meyer server. A bot is a function
-`decide(state, legal_actions) -> action` — the server tells you exactly
-which actions are legal, so the simplest valid bot picks one at random:
+Example clients for the Meyer server, built on the `maier.client` library
+(`python/src/maier/client` in this repo). To write your own client, add the
+`maier` package straight from git:
+
+```sh
+uv add "maier @ git+https://github.com/volesen/maier.git#subdirectory=python"
+```
+
+(This repo's examples use a local path dependency instead — see
+`pyproject.toml` — so they always match the checkout.)
+
+Then implement a function `decide(state, legal_actions) -> action` — the
+server tells you exactly which actions are legal, so the simplest valid bot
+picks one at random:
 
 ```python
 import random
 
-from client import run
-from client.types import Action, State
+from maier.client import run
+from maier.client.types import Action, State
 
 
 def decide(state: State, legal: list[Action]) -> Action:
@@ -17,6 +28,10 @@ def decide(state: State, legal: list[Action]) -> Action:
 
 run(decide, name="my-bot", host="127.0.0.1", port=5000)
 ```
+
+`run()` also takes an `on_message` hook that receives every non-turn server
+message (see `bots/human.py` for an interactive client built on it), a
+`lobby` name, and `start`/`interactive_start` for beginning the game.
 
 Run a built-in baseline against a server:
 
@@ -48,8 +63,8 @@ joins the lobby of that name, creating it if it does not exist yet (clients
 without `--lobby` all share the server's default lobby). `start` only begins
 the sender's own lobby; once a lobby's game starts its name is free to reuse.
 
-The wire protocol is newline-delimited JSON over TCP; see `src/client/types.py`
-for the message shapes. Rolls and claims are plain ranks from 1 (3-2, the
+The wire protocol is newline-delimited JSON over TCP; see `maier.client.types`
+in the library for the message shapes. Rolls and claims are plain ranks from 1 (3-2, the
 lowest roll) to 21 (Meyer) — the protocol never mentions dice, so comparing
 rolls and claims is just integer comparison. Pair ranks (14-19) have
 probability 1/36 each; every other rank has probability 2/36.

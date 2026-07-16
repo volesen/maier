@@ -23,8 +23,8 @@ import time
 
 from pydantic import BaseModel, ValidationError
 
-from engine import state as eng
-from server import protocol as proto
+from maier.engine import state as eng
+from maier.server import protocol as proto
 
 LIVES = 6
 DEFAULT_TURN_DEADLINE_MS = 5000

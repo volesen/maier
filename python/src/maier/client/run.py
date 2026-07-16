@@ -1,6 +1,5 @@
-"""Minimal Meyer bot client: implement decide(state, legal) -> action and call run()."""
+"""The client loop: connect, join a lobby, and answer turn requests."""
 
-import argparse
 import json
 import select
 import socket
@@ -9,7 +8,7 @@ from collections.abc import Callable
 
 from pydantic import TypeAdapter
 
-from client.types import (
+from maier.client.types import (
     Decide,
     EventBase,
     GameEnd,
@@ -21,8 +20,6 @@ from client.types import (
 )
 
 _server_message = TypeAdapter[ServerMessage](ServerMessage)
-
-BOTS = ["random", "honest", "minimal", "paranoid", "cutoff", "statistician", "human"]
 
 
 def _recv_line(sock: socket.socket, buf: bytearray) -> str | None:
@@ -49,7 +46,7 @@ def _buffered_line(buf: bytearray) -> str | None:
 def _lobby(
     sock: socket.socket,
     buf: bytearray,
-    send: Callable[[dict], None],
+    send: Callable[[dict[str, object]], None],
     handle: Callable[[str], object],
 ) -> None:
     """Wait for the game to begin, letting the user start it from stdin."""
@@ -86,10 +83,20 @@ def run(
     interactive_start: bool = False,
     lobby: str | None = None,
 ) -> None:
+    """Join a game and play it with `decide`, returning when the game ends.
+
+    - `on_message` receives every non-turn server message (nothing is printed);
+      without it, `on_event` receives broadcast game events and everything else
+      is printed as raw JSON lines.
+    - `start` asks the server to begin the lobby's game immediately on joining;
+      `interactive_start` instead lets the user trigger it from stdin.
+    - `lobby` selects a named lobby, created on first use (server default
+      lobby otherwise).
+    """
     with socket.create_connection((host, port)) as sock:
         buf = bytearray()
 
-        def send(obj: dict) -> None:
+        def send(obj: dict[str, object]) -> None:
             sock.sendall((json.dumps(obj) + "\n").encode())
 
         def handle(line: str) -> ServerMessage | None:
@@ -114,7 +121,7 @@ def run(
                     print(line)
             return None if isinstance(msg, GameEnd) else msg
 
-        join: dict = {"type": "join", "name": name, "protocol": 1}
+        join: dict[str, object] = {"type": "join", "name": name, "protocol": 1}
         if lobby is not None:
             join["lobby"] = lobby
         send(join)
@@ -125,63 +132,3 @@ def run(
         while (line := _recv_line(sock, buf)) is not None:
             if handle(line) is None:
                 return
-
-
-def main() -> None:
-    from client import baselines, human
-
-    parser = argparse.ArgumentParser(description="Run a Meyer baseline bot")
-    parser.add_argument("bot", nargs="?", default="random", choices=BOTS)
-    parser.add_argument("--name", help="display name (defaults to the bot kind)")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=5000)
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=0.3,
-        help="challenge threshold for cutoff/statistician",
-    )
-    parser.add_argument(
-        "--start",
-        action="store_true",
-        help="ask the server to start the game as soon as this client has joined",
-    )
-    parser.add_argument(
-        "--lobby",
-        help="named lobby to join; created if it does not exist yet (server default otherwise)",
-    )
-    args = parser.parse_args()
-
-    on_event: OnEvent | None = None
-    on_message: OnMessage | None = None
-    interactive_start = False
-    match args.bot:
-        case "human":
-            player = human.HumanPlayer()
-            decide = player.decide
-            on_message = player.on_message
-            interactive_start = not args.start
-        case "honest":
-            decide = baselines.honest
-        case "minimal":
-            decide = baselines.minimal
-        case "paranoid":
-            decide = baselines.paranoid
-        case "cutoff":
-            decide = baselines.cutoff(args.threshold)
-        case "statistician":
-            decide = baselines.statistician(args.threshold)
-        case _:
-            decide = baselines.random_bot
-
-    run(
-        decide,
-        args.name or args.bot,
-        args.host,
-        args.port,
-        on_event=on_event,
-        on_message=on_message,
-        start=args.start,
-        interactive_start=interactive_start,
-        lobby=args.lobby,
-    )

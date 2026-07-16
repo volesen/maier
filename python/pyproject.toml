@@ -1,7 +1,7 @@
 [project]
 name = "maier"
 version = "0.1.0"
-description = "Python implementation of the maier dice game engine and server"
+description = "Python implementation of the maier dice game engine, server, and client library"
 requires-python = ">=3.12"
 dependencies = [
     "beartype>=0.19",
@@ -20,10 +20,7 @@ requires = ["uv_build>=0.10,<0.11"]
 build-backend = "uv_build"
 
 [project.scripts]
-server = "server:main"
-
-[tool.uv.build-backend]
-module-name = ["engine", "server"]
+server = "maier.server:main"
 
 [tool.ruff]
 line-length = 100

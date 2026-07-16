@@ -1,18 +1,22 @@
 [project]
-name = "client"
+name = "bots"
 version = "0.1.0"
-description = "Add your description here"
+description = "Example Meyer clients: baseline bots and an interactive human player"
 readme = "README.md"
 authors = [
     { name = "volesen", email = "vincent@volesen.com" }
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "maier",
     "pydantic>=2.13.4",
 ]
 
 [project.scripts]
-client = "client:main"
+client = "bots:main"
+
+[tool.uv.sources]
+maier = { path = "../../python", editable = true }
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]

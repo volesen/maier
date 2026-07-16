@@ -2,7 +2,7 @@
 
 import random
 
-from client.types import Action, Challenge, Claim, Decide, Reroll, Roll, State
+from maier.client.types import Action, Challenge, Claim, Decide, Reroll, Roll, State
 
 COUNTS = {rank: 1 if 14 <= rank <= 19 else 2 for rank in range(1, 22)}
 """Ways to roll each rank out of 36 ordered outcomes; pairs are single outcomes."""

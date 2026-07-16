@@ -6,7 +6,7 @@ with a generous turn deadline, or it will autoplay for you after the default
 five seconds.
 """
 
-from client.types import (
+from maier.client.types import (
     Action,
     Challenge,
     Challenged,

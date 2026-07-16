@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from engine.state import (
+from maier.engine.state import (
     ClaimAction,
     Dice,
     NewGame,

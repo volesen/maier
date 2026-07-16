@@ -10,8 +10,8 @@ import time
 import pytest
 from pydantic import BaseModel
 
-from server import protocol as proto
-from server.game import Client, Game, LineReader, serve
+from maier.server import protocol as proto
+from maier.server.game import Client, Game, LineReader, serve
 
 
 class BotResult(BaseModel):
