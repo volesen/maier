@@ -18,3 +18,8 @@ serve:
     cargo run --package server --bin server
 
 alias s := serve
+
+push BRANCH:
+    jj git fetch
+    jj bookmark move {{BRANCH}} --to=@-
+    jj git push
